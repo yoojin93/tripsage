@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: TripSage AWS resources
+
+Parameters:
+  ResourceEnv:
+    Description: 'Environment which the resources will be deployed to'
+    Type: 'String'
+    AllowedValues:
+      - 'dev'
+      - 'prod'
+
+  ServiceEnv:
+    Description: 'Name of the service environment'
+    Type: 'String'
+
+  LogLevel:
+    Description: "Log level for functions"
+    Type: String
+    Default: 'INFO'
+    AllowedValues:
+      - 'INFO'
+      - 'DEBUG'
+
+Conditions:
+  IsProdDeployment: !Equals [!Ref ResourceEnv, 'prod']
+
+Globals:
+  Function:
+    Runtime: python3.10
+    MemorySize: 128
+    Timeout: 60
+    Environment:
+      Variables:
+        LOG_LEVEL:
+          Ref: LogLevel
+        ResourceEnv: !Ref ResourceEnv
+        ServiceEnv: !Ref ServiceEnv
+
+Resources:
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      Description: "Lambda layer for Trip Sage"
+      LayerName: !Sub "${ServiceEnv}-CommonLayer"
+      ContentUri: src/common
+      RetentionPolicy: Delete
+      CompatibleRuntimes: 
+        - python3.10
+    Metadata:
+      BuildMethod: makefile
+
+  CreateUserRecord:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: "Creates User Record"
+      FunctionName: !Sub "CreateUserRecord-${ServiceEnv}"
+      Handler: function.handler
+      CodeUri: src/handler
+      Layers:
+        - !Ref CommonLayer
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub "TripSage/${ResourceEnv}/*"
+        - Statement:
+            - Effect: "Allow"
+              Action:
+                - "dynamodb:PutItem"
+                - "dynamodb:GetItem"
+                - "dynamodb:UpdateItem"
+                - "dynamodb:Query"
+              Resource:
+                - !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}"
+                - !Join [ "/", [ !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}", "index", "GSI1"] ]
+                - !Join [ "/", [ !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}", "index", "GSI2"] ]
+
+  CreateUserRecordApiPerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CreateUserRecord.Arn
+      Principal: apigateway.amazonaws.com
+
+###############
+#  S3 BUCKET  #
+###############
+
+  TripSageBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsProdDeployment
+    Properties:
+      BucketName: !Sub tripsage.net
+  
+##############
+#  Rest API  #
+##############
+
+  TripSageApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref ServiceEnv
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          title: !Sub "${ServiceEnv} API"
+          version: "2016-10-31"
+        paths:
+          /user:
+            post:
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateUserRecord.Arn}/invocations"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                type: "aws_proxy"
+        x-amazon-apigateway-policy:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal: "*"
+              Action: "execute-api:Invoke"
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TripSageApi}/*/*/*"
+
+#############
+#  OUTPUTS  #
+#############

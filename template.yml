@@ -1,96 +1,34 @@
-AWSTemplateFormatVersion: 2010-09-09
-Transform: AWS::Serverless-2016-10-31
-Description: TripSage AWS resources
-
-Parameters:
-  ResourceEnv:
-    Description: 'Environment which the resources will be deployed to'
-    Type: 'String'
-    AllowedValues:
-      - 'dev'
-      - 'prod'
-
-  ServiceEnv:
-    Description: 'Name of the service environment'
-    Type: 'String'
-
-  LogLevel:
-    Description: "Log level for functions"
-    Type: String
-    Default: 'INFO'
-    AllowedValues:
-      - 'INFO'
-      - 'DEBUG'
-
-Conditions:
-  IsProdDeployment: !Equals [!Ref ResourceEnv, 'prod']
-
-Globals:
-  Function:
-    Runtime: python3.10
-    MemorySize: 128
-    Timeout: 60
-    Environment:
-      Variables:
-        LOG_LEVEL:
-          Ref: LogLevel
-        ResourceEnv: !Ref ResourceEnv
-        ServiceEnv: !Ref ServiceEnv
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: IaC is awesome!
 
 Resources:
-  CommonLayer:
-    Type: AWS::Serverless::LayerVersion
+  YourLambdaFunction:
+    Type: 'AWS::Serverless::Function'
     Properties:
-      Description: "Lambda layer for Trip Sage"
-      LayerName: !Sub "${ServiceEnv}-CommonLayer"
-      ContentUri: src/common
-      RetentionPolicy: Delete
-      CompatibleRuntimes: 
-        - python3.10
-    Metadata:
-      BuildMethod: makefile
-
-  CreateUserRecord:
-    Type: AWS::Serverless::Function
-    Properties:
-      Description: "Creates User Record"
-      FunctionName: !Sub "CreateUserRecord-${ServiceEnv}"
-      Handler: function.handler
-      CodeUri: src/handler
-      Layers:
-        - !Ref CommonLayer
-      Policies:
-        - SSMParameterReadPolicy:
-            ParameterName: !Sub "TripSage/${ResourceEnv}/*"
-        - Statement:
-            - Effect: "Allow"
-              Action:
-                - "dynamodb:PutItem"
-                - "dynamodb:GetItem"
-                - "dynamodb:UpdateItem"
-                - "dynamodb:Query"
-              Resource:
-                - !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}"
-                - !Join [ "/", [ !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}", "index", "GSI1"] ]
-                - !Join [ "/", [ !Sub "{{resolve:ssm:/TripSage/${ResourceEnv}/TripSageDdbArn}}", "index", "GSI2"] ]
-
-  CreateUserRecordApiPerm:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CreateUserRecord.Arn
-      Principal: apigateway.amazonaws.com
-
-###############
-#  S3 BUCKET  #
-###############
-
-  TripSageBucket:
-    Type: AWS::S3::Bucket
-    Condition: IsProdDeployment
-    Properties:
-      BucketName: !Sub tripsage.net
+      Handler: app.handler
+      Runtime: nodejs14.x
+      CodeUri: src/
+      Description: An Amazon DynamoDB trigger that logs the updates made to a table.
+      MemorySize: 128
+      Timeout: 3
+      Events:
+        MyDynamoDBtable:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt MyDynamoDBtable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
   
-#############
-#  OUTPUTS  #
-#############
+  YourDynamoDBtable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
